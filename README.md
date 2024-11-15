@@ -5,7 +5,8 @@
 
 A simple and efficient Python script for ARP spoofing on Linux.  This script utilizes the `scapy` library for packet manipulation and requires root privileges for operation.
 
-**Disclaimer:** This tool is intended for educational and ethical hacking purposes only.  Using this script for unauthorized access or malicious activities is illegal and unethical.  I am not responsible for any misuse of this tool.
+> [!CAUTION]
+> **Disclaimer:** This tool is intended for educational and ethical hacking purposes only.  Using this script for unauthorized access or malicious activities is illegal and unethical.  I am not responsible for any misuse of this tool.
 
 ## Features
 
@@ -45,7 +46,9 @@ pip install -r requirments.txt
 ```   
 ## Usage
 > [!NOTE]
-> Before running the script, ensure you have root privileges (using sudo).  The script accepts the following arguments:
+> Before running the script, ensure you have root privileges (using sudo).  
+
+The script accepts the following arguments:
 
 • -i <interface>:  The network interface to use. **Required.**
 
