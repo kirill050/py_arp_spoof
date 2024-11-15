@@ -44,8 +44,8 @@ source .venv/bin/activate
 pip install -r requirments.txt
 ```   
 ## Usage
-[!NOTE]
-Before running the script, ensure you have root privileges (using sudo).  The script accepts the following arguments:
+> [!NOTE]
+> Before running the script, ensure you have root privileges (using sudo).  The script accepts the following arguments:
 
 • -i <interface>:  The network interface to use. **Required.**
 
