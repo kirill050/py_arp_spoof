@@ -1,2 +1,5 @@
 *.pcap
 /venv
+/build
+/dist
+/py_arp_spoof.egg-info

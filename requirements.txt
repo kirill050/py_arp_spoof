@@ -1,0 +1,4 @@
+scapy~=2.6.1
+rich~=13.9.4
+keyboard~=0.13.5
+setuptools~=65.5.1

@@ -31,19 +31,16 @@ A simple and efficient Python script for ARP spoofing on Linux.  This script uti
 
 ## Installation
 
-1. By setup.py...:
 ```sh
-sudo ./setup.sh
-source .venv/bin/activate
+sudo python3 setup.py install
 ```
-2. ...or Manually: 
-```sh
-git clone https://github.com/kirill050/py-arp-spoof.git
-cd py-arp-spoof
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirments.txt
-```   
+> [!IMPORTANT]
+> If an error occurs during the installation of a new version of the utility, please try deleting the directory mentioned in the example.
+> The numbers in the directory name may vary depending on the installed version of Python.
+```shell
+sudo rm -rf /usr/local/lib/python3.12/dist-packages/setuptools-65.5.1-py3.12.egg
+```
+  
 ## Usage
 > [!NOTE]
 > Before running the script, ensure you have root privileges (using sudo).  
@@ -65,11 +62,11 @@ The script accepts the following arguments:
 To intercept all traffic circulated at net with gateway 192.168.1.1 visible through interface wlan12 and save result at Desktop/test.pcap:
 
 ```sh
-sudo python3 arp_spoof.py -i wlan12 -g 192.168.1.1 -w ~/Desktop/test.pcap
+sudo py_arp_spoof -i wlan12 -g 192.168.1.1 -w ~/Desktop/test.pcap
 ````
 To spoof unidirectionally and quietly(only from the client to the external network):
 ```sh
-sudo python3 arp_spoof.py -i eth0 -q True
+sudo py_arp_spoof -i eth0 -q True
 ```
 
 **Stopping the script:**  Press Ctrl+C to stop the ARP spoofing.
