@@ -69,4 +69,4 @@ To spoof unidirectionally and quietly(only from the client to the external netwo
 sudo py_arp_spoof -i eth0 -q True
 ```
 
-**Stopping the script:**  Press Ctrl+C to stop the ARP spoofing.
+**Stopping the script:**  Press "q" or "Q" or Ctrl+C to stop the ARP spoofing.
