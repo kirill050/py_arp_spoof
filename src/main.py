@@ -227,6 +227,8 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
     __verbose_state = verbose_enabled
     verbose_enabled = False
 
+    local_ips = []
+
     if __verbose_state == True:
         with Progress() as progress:
             print(f"Изучаю локальную подсеть {network}...")
@@ -258,9 +260,11 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
                     arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
                     log.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
                     log.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
+                    local_ips.append(received.psrc)
     verbose_enabled = __verbose_state
     if verbose_enabled:
         print('Press \"q\" to exit program\n')
+    return local_ips
 
 
 def main():
@@ -326,11 +330,12 @@ def main():
 
     if not quiet_mode:
         if gateway_ip != "":
-            network_arp_discovery(interface, gateway_ip, gateway_mac)
-            old_list.append(gateway_ip)
+            old_list += network_arp_discovery(interface, gateway_ip, gateway_mac)
+            if gateway_ip not in old_list:
+                old_list.append(gateway_ip)
             last_spoof_time[gateway_ip] = time.time()
         else:
-            network_arp_discovery(interface)
+            old_list += network_arp_discovery(interface)
 
     while True:
         try:
