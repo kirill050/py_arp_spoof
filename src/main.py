@@ -132,12 +132,12 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
-            if str(target_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0]:
+            if str(target_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(target_ip) != str(spoof_ip):
                 if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00":
                     if target_ip not in queue.queue:
                         queue.put((target_ip, target_mac))
                         queue.put((target_ip, target_mac))
-            if str(victim_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0]:
+            if str(victim_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(victim_ip) != str(spoof_ip):
                 if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00":
                     if target_ip not in queue.queue:
                         queue.put((victim_ip, victim_mac))
