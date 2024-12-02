@@ -96,6 +96,7 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
     # Функция для обработки пакетов
     def packet_handler(packet):
         nonlocal queue
+        spoof_ip = get_if_addr(interface)
 
         if packet.haslayer(DHCP):
             # Извлекаем IP и MAC адреса
@@ -112,7 +113,10 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
                 queue.put((target_ip, target_mac))
         elif packet.haslayer(ARP):
             # Извлекаем IP и MAC адреса
+            print(f"ARP.op={packet[ARP].op}")
             if packet[ARP].op == 2:
+                print(f"ARP.op={packet[ARP].op}")
+                print(packet[ARP].show())
                 victim_ip = packet[ARP].psrc
                 victim_mac = packet[ARP].hwsrc
 
@@ -131,11 +135,16 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
-            if str(target_ip).rpartition(".")[0] == str(victim_ip).rpartition(".")[0]:
+            if str(target_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0]:
                 if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00":
                     if target_ip not in queue.queue:
-                        queue.put((victim_ip, victim_mac))
                         queue.put((target_ip, target_mac))
+                        queue.put((target_ip, target_mac))
+            if str(victim_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0]:
+                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00":
+                    if target_ip not in queue.queue:
+                        queue.put((victim_ip, victim_mac))
+                        queue.put((victim_ip, victim_mac))
 
         # Записываем пакет в pcap файл
         if pcap_name != "":
