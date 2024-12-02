@@ -365,6 +365,7 @@ def main():
                     arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
                     log.info(f"Resent arp spoof about {old_list[i]}")
                     sendp(arp_packet, verbose=0, count=3)
+                    global_resend_time = time.time()
         except Empty:
             # Ожидаем новые данные
             if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
@@ -374,6 +375,7 @@ def main():
                     arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
                     log.info(f"Resent arp spoof about {old_list[i]}")
                     sendp(arp_packet, verbose=0, count=3)
+                    global_resend_time = time.time()
             pass
         except OSError as e:
             if verbose_enabled:
