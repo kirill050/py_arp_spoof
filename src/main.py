@@ -113,10 +113,7 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
                 queue.put((target_ip, target_mac))
         elif packet.haslayer(ARP):
             # Извлекаем IP и MAC адреса
-            print(f"ARP.op={packet[ARP].op}")
             if packet[ARP].op == 2:
-                print(f"ARP.op={packet[ARP].op}")
-                print(packet[ARP].show())
                 victim_ip = packet[ARP].psrc
                 victim_mac = packet[ARP].hwsrc
 
