@@ -57,6 +57,8 @@ The script accepts the following arguments:
 
 • -q <bool>: (Optional) Enabling a more inconspicuous network interaction mode (True/<b>False</b>).
 
+• --rotate_output_len <int>: (Optional) Enabling log rotating mode and specifying max size of them (Number of Mbytes).
+
 **Example:**
 
 To intercept all traffic circulated at net with gateway 192.168.1.1 visible through interface wlan12 and save result at Desktop/test.pcap:
