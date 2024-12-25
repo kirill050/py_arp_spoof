@@ -72,6 +72,8 @@ sudo py_arp_spoof -i eth0 -q True
 ```
 To run in background and stay running after ssh_logout
 ```sh
-sudo nohup py_arp_spoof -i eth0 g 192.168.1.1 -w ~/Desktop/test.pcap &
+sudo nohup py_arp_spoof -i eth0 -g 192.168.1.1 -w ~/Desktop/test.pcap &
 ```
 **Stopping the script:**  Press "q" or "Q" or Ctrl+C to stop the ARP spoofing.
+> [!NOTE]
+> All log files could be found in folder that contains this repository downloaded.  
