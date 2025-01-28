@@ -424,7 +424,7 @@ def main():
     os.system("iptables --flush > /dev/null")
     os.system("iptables -P FORWARD ACCEPT > /dev/null")
     logger.info("killed unnecessary iptables")
-    print("killed unnecessary iptables"
+    print("killed unnecessary iptables")
 
     parser = argparse.ArgumentParser(description="ARP-подделка с обнаружением новых устройств.")
     if len(sys.argv) == 1:
