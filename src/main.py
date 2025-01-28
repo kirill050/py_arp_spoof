@@ -475,7 +475,7 @@ def main():
     s2 = conf.L2socket(iface=interface)
 
     # Запускаем параллельный процесс для сканирования
-    sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=(s))
+    sniff_thread = threading.Thread(target=sniffer.sniff_and_find_new_devices, args=(s,))
     sniff_thread.daemon = True  # Делаем поток фоновым
     sniff_thread.start()
     logger.info("Started sniffing thread")
