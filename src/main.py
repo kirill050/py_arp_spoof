@@ -18,7 +18,7 @@ import keyboard
 import logging as log
 from datetime import datetime
 
-verbose_enabled = True
+verbose_enabled = False
 bidirectional = True
 rotate_output_len = 0
 PID = os.getpid()
